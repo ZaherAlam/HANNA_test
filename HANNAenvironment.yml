@@ -1,0 +1,25 @@
+name: HANNA
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - pytorch
+  - torchvision
+  - torchaudio
+  - rdkit
+  - pyyaml
+  - ipykernel
+  - jupyterlab
+  - pip
+
+  - pip:
+      - transformers
+      - tokenizers
+      - huggingface-hub
+      - safetensors

@@ -1,0 +1,14 @@
+model:
+  input_dim: 2051         # or recalculate if this is derived
+  Embedding_ChemBERT: 384
+  hidden_dim: 256
+  nodes: 96
+  embedding_dim: 384      # set this same as Embedding_ChemBERT
+  num_layers: 3
+
+training:
+  epochs: 50
+  batch_size: 128
+  lr: 0.001
+  embedding_dim: 384
+  weight_decay: 0.0001
