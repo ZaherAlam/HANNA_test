@@ -48,6 +48,12 @@ def prepare_data(targets_path, features_path):
     targets_df = pd.read_csv(targets_path)
     features_df = pd.read_csv(features_path)
 
+    # Ensure ln_gamma columns are floats
+    for col in ['ln_gamma_1', 'ln_gamma_2']:
+        if col in targets_df.columns:
+            targets_df[col] = pd.to_numeric(targets_df[col], errors='coerce')
+
+
     X_embeds = []
     for idx, row in targets_df.iterrows():
         T = features_df.loc[idx, 'T(K)']  
@@ -96,7 +102,7 @@ if X_val is not None:
 
 # === Model and Optimizer ===
 model = HANNA(Embedding_ChemBERT=embedding_dim, nodes=nodes).to(device)
-optimizer = optim.Adam(model.parameters(), lr=lr)
+optimizer = optim.AdamW(model.parameters(), lr=lr)
 
 # === Training Loop ===
 for epoch in range(epochs):
@@ -117,25 +123,28 @@ for epoch in range(epochs):
         pred_gamma1 = torch.exp(pred_ln_gamma1)
         pred_gamma2 = torch.exp(pred_ln_gamma2)
 
-        # Extract log10P1sat and log10P2sat and experimental log10P
-        log10P1sat_batch = torch.tensor(train_features_df['log10P1sat'].values[i:i+batch_size], dtype=torch.float32).to(device)
-        log10P2sat_batch = torch.tensor(train_features_df['log10P2sat'].values[i:i+batch_size], dtype=torch.float32).to(device)
+        train_targets['ln_gamma_1'] = pd.to_numeric(train_targets['ln_gamma_1'], errors='coerce')
+        train_targets['ln_gamma_2'] = pd.to_numeric(train_targets['ln_gamma_2'], errors='coerce')
 
-        log10P_exp = torch.tensor(train_targets['log10P'].values[i:i+batch_size], dtype=torch.float32).to(device)
 
-        # Calculate predicted log10P
-        log10P_pred = compute_log10P(x1_batch.squeeze(), 1 - x1_batch.squeeze(),
-                                    pred_gamma1, pred_gamma2,
-                                    log10P1sat_batch, log10P2sat_batch)
+        # Get ground truth ln_gamma values
+        ln_gamma1_batch = torch.tensor(train_targets['ln_gamma_1'].values[i:i+batch_size], dtype=torch.float32).to(device)
+        ln_gamma2_batch = torch.tensor(train_targets['ln_gamma_2'].values[i:i+batch_size], dtype=torch.float32).to(device)
 
-        # Compute loss
-        loss = thermodynamic_loss_log10P(log10P_pred, log10P_exp)
+        # Compute MSE loss directly on ln_gamma predictions
+        loss = nn.functional.mse_loss(pred_ln_gamma1, ln_gamma1_batch) + nn.functional.mse_loss(pred_ln_gamma2, ln_gamma2_batch)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
         epoch_loss += loss.item()
+        model.eval()
+        with torch.no_grad():
+            val_pred, _ = model(T_val, x1_val, emb_val)
+            val_loss = ...
+        print(f"Val Loss: {val_loss:.4f}")
+
 
     print(f"Epoch {epoch + 1}/{epochs} | Loss: {epoch_loss:.4f}")
 
