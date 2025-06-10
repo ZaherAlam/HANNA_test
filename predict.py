@@ -13,7 +13,6 @@ from sklearn.metrics import mean_squared_error
 # === Argument Parsing ===
 parser = argparse.ArgumentParser()
 parser.add_argument('--test_targets', type=str, required=True)
-parser.add_argument('--test_features', type=str, required=True)
 parser.add_argument('--model_path', type=str, required=True)
 parser.add_argument('--config', type=str, required=True)
 parser.add_argument('--out_dir', type=str, required=True)
@@ -28,7 +27,6 @@ EMBED_DIM = config['model']['Embedding_ChemBERT']
 HIDDEN_NODES = config['model']['nodes']
 
 # === Load Data ===
-features_df = pd.read_csv(args.test_features)
 targets_df = pd.read_csv(args.test_targets)
 
 # === Load Model ===
@@ -54,8 +52,8 @@ for smile in unique_smiles:
 all_embeddings = []
 for i, row in targets_df.iterrows():
     sm1, sm2 = row['SMILE 1'], row['SMILE 2']
-    T = features_df.loc[i, 'T(K)']
-    x1 = features_df.loc[i, 'x1']
+    T = targets_df.loc[i, 'T(K)']
+    x1 = targets_df.loc[i, 'x1']
     emb_row = np.concatenate([[T, x1], embedding_cache[row['SMILE 1']], embedding_cache[row['SMILE 2']]])
     all_embeddings.append(emb_row)
 

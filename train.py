@@ -14,16 +14,21 @@ from utils.Utils import preprocess_input, split_and_reshape_input
 from utils.Own_Scaler import CustomScaler
 from utils.Utils import initiliaze_ChemBERTA, create_embedding_matrix, get_smiles_embedding, preprocess_input, canonicalize_smiles
 
-
 # === Argument Parsing ===
 parser = argparse.ArgumentParser()
 parser.add_argument('--train_targets', type=str, required=True)
-parser.add_argument('--train_features', type=str, required=True)
 parser.add_argument('--val_targets', type=str, required=False)
-parser.add_argument('--val_features', type=str, required=False)
 parser.add_argument('--save_dir', type=str, required=True)
 parser.add_argument('--config', type=str, required=True)
+parser.add_argument('--seed', type=int, default=0, help='Random seed for reproducibility')
 args = parser.parse_args()
+
+# === Set Seed for Reproducibility ===
+seed = args.seed
+torch.manual_seed(seed)
+np.random.seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed)
 
 # === Load Config ===
 with open(args.config, 'r') as f:
@@ -50,9 +55,8 @@ ChemBERTA, tokenizer = initiliaze_ChemBERTA(device=device)
 os.makedirs(args.save_dir, exist_ok=True)
 
 # === Load Data ===
-def prepare_data(targets_path, features_path):
+def prepare_data(targets_path):
     targets_df = pd.read_csv(targets_path)
-    features_df = pd.read_csv(features_path)
 
     # Ensure ln_gamma columns are floats
     for col in ['ln_gamma_1', 'ln_gamma_2']:
@@ -67,8 +71,8 @@ def prepare_data(targets_path, features_path):
 
     X_embeds = []
     for idx, row in targets_df.iterrows():
-        T = features_df.loc[idx, 'T(K)']  
-        x1 = features_df.loc[idx, 'x1']
+        T = targets_df.loc[idx, 'T(K)']  
+        x1 = targets_df.loc[idx, 'x1']
         ## Instead of using the utils create_embedding_matrix function, we will build it from cached values.
         # emb_row = create_embedding_matrix(
         #     row['SMILE 1'], row['SMILE 2'],
@@ -80,17 +84,17 @@ def prepare_data(targets_path, features_path):
 
     X_embeds = np.stack(X_embeds)
     X_embeds = preprocess_input(X_embeds, Embedding_BERT=embedding_dim)
-    return X_embeds, targets_df, features_df
+    return X_embeds, targets_df
 
 
-X_train_raw, train_targets, train_features_df = prepare_data(args.train_targets, args.train_features)
+X_train_raw, train_targets = prepare_data(args.train_targets)
 # === Preprocess Data ===
 print("Preprocessing input data...")
 scaler = CustomScaler(Embedding_BERT=config['model']['Embedding_ChemBERT'])
 X_train = scaler.fit_transform(X_train_raw)
 
-if args.val_targets and args.val_features:
-    X_val_raw, val_targets, val_features_df = prepare_data(args.val_targets, args.val_features)
+if args.val_targets:
+    X_val_raw, val_targets = prepare_data(args.val_targets)
     X_val = scaler.transform(X_val_raw)
 else:
     X_val, val_targets = None, None
