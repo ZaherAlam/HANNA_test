@@ -3,8 +3,9 @@ from transformers import AutoModel, AutoTokenizer
 import numpy as np
 from rdkit import Chem
 from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Split
+from tokenizers import Regex
+from tokenizers.models import WordLevel
 import os
       
 def predict(embedding_matrix, scaler, model, device): # Function to predict ln_gamma values
@@ -75,40 +76,33 @@ def canonicalize_smiles(smiles):
 
 
 
-def initiliaze_ChemBERTA(model_name="DeepChem/ChemBERTa-77M-MTR", device=None, freeze_layers=True):
-    # Load the tokenizer
+def initiliaze_ChemBERTA(model_name="DeepChem/ChemBERTa-77M-MTR", device=None):
+    # Load the tokenizer from the pre-trained model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-
-    # Save tokenizer vocabulary
+    
+    # Create the directory if it doesn't exist
     os.makedirs('ChemBERTa', exist_ok=True)
+    
+    # Save the tokenizer's vocabulary to the specified folder
     tokenizer.save_vocabulary('ChemBERTa/')
-
-    # Load model and move to device
-    ChemBERTA = AutoModel.from_pretrained(model_name).to(device)
-
-    # Freeze parameters
-    if freeze_layers:
-        for param in ChemBERTA.parameters():
-            param.requires_grad = False
-        print("✅ ChemBERTa layers frozen.")
-
-    ChemBERTA.eval()
-    for param in ChemBERTA.parameters():
-        param.requires_grad = False
-
-    print("✅ ChemBERTa set to eval mode.")
-
-    # Load vocabulary for tokenizer
+    
+    # Define ChemBERTa model and move it to the specified device
+    ChemBERTA = AutoModel.from_pretrained(pretrained_model_name_or_path=model_name).to(device)
+    
+    # Load custom tokenizer using the saved vocab.json
     custom_tokenizer = Tokenizer(
-        WordLevel.from_file('ChemBERTa/vocab.json', unk_token='[UNK]')
+        WordLevel.from_file(
+            'ChemBERTa/vocab.json',  # Path to your custom vocabulary file
+            unk_token='[UNK]'
+        )
     )
 
-    # Set SMILES pre-tokenizer (no Regex import needed)
-    custom_tokenizer.pre_tokenizer = Split(
-        pattern=r"\[(.*?)\]|Br|Cl|.",  # pass raw string regex here
+    # Set the pre-tokenizer to split SMILES characters (including handling Br, Cl, etc.)
+    pre_tokenizer = Split(
+        pattern=Regex(r"\[(.*?)\]|Br|Cl|."),
         behavior='isolated'
     )
-
+    custom_tokenizer.pre_tokenizer = pre_tokenizer
     return ChemBERTA, custom_tokenizer
 
 def get_smiles_embedding(smiles, custom_tokenizer, ChemBERTA, device, max_length=512):

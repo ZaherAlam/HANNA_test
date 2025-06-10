@@ -4,11 +4,10 @@ import torch
 import pandas as pd
 import numpy as np
 import yaml
-from utils.embeddings import get_smiles_embedding
-from models.HANNA import HANNA
-from utils.utils import preprocess_input, split_and_reshape_input, create_embedding_matrix, initiliaze_ChemBERTA
+from utils.HANNA import HANNA
+from utils.Utils import preprocess_input, split_and_reshape_input, create_embedding_matrix, initiliaze_ChemBERTA, canonicalize_smiles, get_smiles_embedding
 from utils.thermodynamics import compute_log10P, thermodynamic_loss_log10P
-from utils.scalers import CustomScaler
+from utils.Own_Scaler import CustomScaler
 from sklearn.metrics import mean_squared_error
 
 # === Argument Parsing ===
@@ -33,6 +32,7 @@ features_df = pd.read_csv(args.test_features)
 targets_df = pd.read_csv(args.test_targets)
 
 # === Load Model ===
+print("Loading model...")
 model = HANNA(Embedding_ChemBERT=EMBED_DIM, nodes=HIDDEN_NODES)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 model.load_state_dict(torch.load(args.model_path, map_location=device))
@@ -40,20 +40,29 @@ model.to(device)
 model.eval()
 
 # === Initialize ChemBERTa and Tokenizer ===
-ChemBERTA, custom_tokenizer = initiliaze_ChemBERTA(device=device)
+print("Initializing ChemBERTA...")
+ChemBERTA, tokenizer = initiliaze_ChemBERTA(device=device)
 
 # === Generate Embedding Matrix ===
+print("Creating embedding matrix...")
+embedding_cache = {}
+unique_smiles = set(targets_df['SMILE 1']).union(set(targets_df['SMILE 2']))
+for smile in unique_smiles:
+    c_smile = canonicalize_smiles(smile)
+    embedding_cache[smile] = get_smiles_embedding(c_smile,custom_tokenizer=tokenizer,ChemBERTA=ChemBERTA,device=device).flatten()
+
 all_embeddings = []
 for i, row in targets_df.iterrows():
     sm1, sm2 = row['SMILE 1'], row['SMILE 2']
     T = features_df.loc[i, 'T(K)']
     x1 = features_df.loc[i, 'x1']
-    emb_row = create_embedding_matrix(sm1, sm2, T, device, ChemBERTA, custom_tokenizer, x1_values=[x1])[0]
+    emb_row = np.concatenate([[T, x1], embedding_cache[row['SMILE 1']], embedding_cache[row['SMILE 2']]])
     all_embeddings.append(emb_row)
 
 embedding_matrix = np.array(all_embeddings)  # shape [N, 2+2*384]
 
 # === Preprocess Input ===
+print("Preprocessing input...")
 X_test_processed = preprocess_input(embedding_matrix, Embedding_BERT=EMBED_DIM)
 
 # === Scale ===
@@ -67,33 +76,20 @@ x_tensor = torch.tensor(x_tensor, dtype=torch.float32, device=device)
 FPs_tensor = torch.tensor(FPs_tensor, dtype=torch.float32, device=device)
 
 # === Predict (do NOT disable gradients since autograd is used in model)
+print("Making predictions...")
 x_tensor.requires_grad_(True)
 T_tensor.requires_grad_(True)
 ln_gammas_pred, gE_pred = model(T_tensor, x_tensor, FPs_tensor)
 
-
-y1_pred = x_tensor.detach().cpu().numpy().flatten()
-y2_pred = 1 - y1_pred
 ln_gamma_1 = ln_gammas_pred[:, 0].detach().cpu().numpy()
 ln_gamma_2 = ln_gammas_pred[:, 1].detach().cpu().numpy()
-gE_vals = gE_pred.detach().cpu().numpy()
-gamma_1 = np.exp(ln_gamma_1)
-gamma_2 = np.exp(ln_gamma_2)
-x2_pred = 1 - y1_pred
-log10P_pred = np.log10(y1_pred * gamma_1 * 10**features_df['log10P1sat'].values +
-                       x2_pred * gamma_2 * 10**features_df['log10P2sat'].values)
 
 # === Final DataFrame ===
 output_df = pd.DataFrame({
     'SMILE 1': targets_df['SMILE 1'],
     'SMILE 2': targets_df['SMILE 2'],
-    'y1': y1_pred,
-    'y2': y2_pred,
-    'log10P': log10P_pred,
     'ln_gamma_1': ln_gamma_1,
     'ln_gamma_2': ln_gamma_2,
-    'log10P1sat': features_df['log10P1sat'],
-    'log10P2sat': features_df['log10P2sat']
 })
 
 # === Save Prediction File ===
@@ -102,15 +98,16 @@ pred_path = os.path.join(args.out_dir, args.out_name)
 output_df.to_csv(pred_path, index=False)
 
 # === Evaluation Metrics ===
-y_true = targets_df[['y1', 'y2', 'log10P']].values
-y_pred = output_df[['y1', 'y2', 'log10P']].values
-rmse = np.sqrt(((y_true - y_pred) ** 2).mean(axis=0))
+gamma_true = targets_df[['ln_gamma_1', 'ln_gamma_2']].values
+gamma_pred = output_df[['ln_gamma_1', 'ln_gamma_2']].values
+gamma_rmse = np.sqrt(((gamma_true - gamma_pred) ** 2).mean())
+
+print(f"RMSE for ln_gamma: {gamma_rmse:.4f}")
 
 score_df = pd.DataFrame({
-    'Task': ['y1', 'y2', 'log10P'],
-    'Mean rmse': rmse,
-    'Standard deviation rmse': [0]*3,
-    'Fold 0 rmse': rmse
+    'Task': ['ln_gamma_1', 'ln_gamma_2'],
+    'Mean rmse': gamma_rmse,
 })
+
 score_df.to_csv(os.path.join(args.out_dir, 'test_scores.csv'), index=False)
 print(f"✅ Predictions saved to: {pred_path}\n✅ Scores saved to: test_scores.csv")
